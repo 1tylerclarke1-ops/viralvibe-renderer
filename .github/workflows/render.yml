@@ -1,0 +1,40 @@
+name: Render reels
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"   # every 4 hours (UTC)
+  workflow_dispatch:          # "Run workflow" button for manual runs
+
+concurrency:
+  group: render-reels
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg and Python packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          pip install -q -r requirements.txt
+
+      - name: Download fonts (Outfit, JetBrains Mono)
+        run: |
+          mkdir -p fonts
+          curl -sSfL -o fonts/Outfit.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/outfit/Outfit%5Bwght%5D.ttf"
+          curl -sSfL -o fonts/JetBrainsMono.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
+
+      - name: Render and upload
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          RENDER_KEY: ${{ secrets.RENDER_KEY }}
+          MAX_RENDERS: "2"
+        run: python render.py
