@@ -34,7 +34,7 @@ jobs:
 
       - name: Render and upload
         env:
-          APP_URL: ${{ vars.APP_URL }}
+          APP_URL: ${{ vars.APP_URL || secrets.APP_URL || 'https://industrious-viral-story-snap.base44.app' }}
           RENDER_KEY: ${{ secrets.RENDER_KEY }}
           MAX_RENDERS: "2"
         run: python render.py
