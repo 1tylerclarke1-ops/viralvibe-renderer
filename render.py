@@ -253,9 +253,11 @@ def render_story(story, work):
     audio_parts.append(title_wav)
 
     beats = []
+    # One entry per spoken line: a whole beat for older stories, or each speaker's
+    # line in its own voice for stories with a cast.
     for index, beat in enumerate(story.get("beats") or []):
-        mp3 = download(beat["audio_url"], work / f"beat{index}.mp3")
-        wav = to_wav(mp3, work / f"beat{index}.wav")
+        mp3 = download(beat["audio_url"], work / f"line{index:03d}.mp3")
+        wav = to_wav(mp3, work / f"line{index:03d}.wav")
         audio_parts.append(wav)
         beats.append((beat, duration_of(wav)))
     audio_parts.append(silence_wav(END_CARD_SECONDS, work / "end.wav"))
@@ -270,11 +272,28 @@ def render_story(story, work):
     spans.append((path, clock, clock + title_seconds))
     clock += title_seconds
 
+    # Each line plays over its beat's own still when it has one; every line of a
+    # beat shares that still. Stills are fetched once each.
+    stills = {}
+
+    def base_for(url):
+        if not url:
+            return base
+        if url not in stills:
+            try:
+                image = download(url, work / f"still{len(stills)}.img")
+                stills[url] = build_base(image, logo)
+            except Exception as error:  # a missing still falls back to the backdrop
+                print(f"  still unavailable, using backdrop: {error}")
+                stills[url] = base
+        return stills[url]
+
     for index, (beat, seconds) in enumerate(beats):
         pages = beat.get("pages") or [{"text": "", "start": 0, "end": 1}]
+        beat_base = base_for(beat.get("image_url") or "")
         for page_index, page in enumerate(pages):
-            path = work / f"f_{index:02d}_{page_index:03d}.png"
-            caption_frame(base, fonts, page.get("text")).convert("RGB").save(path, optimize=False)
+            path = work / f"f_{index:03d}_{page_index:03d}.png"
+            caption_frame(beat_base, fonts, page.get("text")).convert("RGB").save(path, optimize=False)
             start = clock + seconds * float(page.get("start", 0))
             end = clock + seconds * float(page.get("end", 1))
             if page_index == len(pages) - 1:
