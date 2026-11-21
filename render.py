@@ -53,12 +53,15 @@ def next_story():
     return None if data.get("none") else data
 
 
-def upload_reel(story_id, path):
+def upload_reel(story_id, path, episode=None):
+    data = {"script_id": story_id}
+    if episode is not None:  # Viral Studios: one video per episode of a series
+        data["episode"] = str(episode)
     with open(path, "rb") as handle:
         response = requests.post(
             f"{APP_URL}/api/render/complete",
             headers=api_headers(),
-            data={"script_id": story_id},
+            data=data,
             files={"file": ("reel.mp4", handle, "video/mp4")},
             timeout=600,
         )
@@ -177,12 +180,17 @@ def draw_spaced(frame, text, face, y, fill, spacing):
 
 
 def build_base(backdrop_path, logo):
-    plate = Image.open(backdrop_path).convert("RGBA")
-    scale = max(W / plate.width, H / plate.height)
-    size = (round(plate.width * scale), round(plate.height * scale))
-    plate = plate.resize(size, Image.LANCZOS)
-    base = Image.new("RGBA", (W, H), (11, 12, 16, 255))
-    base.alpha_composite(plate, ((W - size[0]) // 2, (H - size[1]) // 2))
+    """The picture with the reel's gradient and logo on top. With no picture
+    (backdrop_path None) it is a transparent overlay for a moving background."""
+    if backdrop_path is None:
+        base = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    else:
+        plate = Image.open(backdrop_path).convert("RGBA")
+        scale = max(W / plate.width, H / plate.height)
+        size = (round(plate.width * scale), round(plate.height * scale))
+        plate = plate.resize(size, Image.LANCZOS)
+        base = Image.new("RGBA", (W, H), (11, 12, 16, 255))
+        base.alpha_composite(plate, ((W - size[0]) // 2, (H - size[1]) // 2))
 
     # Vertical gradient: 0.9 at the top, 0.25 at 45%, 0.95 at the bottom.
     gradient = Image.new("RGBA", (1, H))
@@ -195,8 +203,9 @@ def build_base(backdrop_path, logo):
         gradient.putpixel((0, y), (11, 12, 16, round(alpha * 255)))
     base.alpha_composite(gradient.resize((W, H)))
 
-    top_logo = logo.resize((203, 203), Image.LANCZOS)
-    base.alpha_composite(top_logo, ((W - 203) // 2, 60))
+    if logo is not None:
+        top_logo = logo.resize((203, 203), Image.LANCZOS)
+        base.alpha_composite(top_logo, ((W - 203) // 2, 60))
     return base
 
 
@@ -210,7 +219,7 @@ def title_frame(base, fonts, story):
     placed = block_positions(lines or [""], 960, 79)
     label = str(story.get("trope_label") or "STORY").upper()
     draw_spaced(frame, label, fonts.label, placed[0][1] - 81, PRIMARY + (255,), 5)
-    draw_spaced(frame, "VIRAL VIBE STORIES", fonts.label, placed[-1][1] + 91, (255, 255, 255, 115), 5)
+    draw_spaced(frame, brand_of(story), fonts.label, placed[-1][1] + 91, (255, 255, 255, 115), 5)
     return frame
 
 
@@ -222,19 +231,70 @@ def caption_frame(base, fonts, text):
     return frame
 
 
-def end_frame(base, fonts, logo):
+def brand_of(story):
+    return str(story.get("brand") or "VIRAL VIBE STORIES").upper()
+
+
+def end_frame(base, fonts, logo, story=None):
+    story = story or {}
     frame = base.copy()
-    big = logo.resize((254, 254), Image.LANCZOS)
-    glow = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-    silhouette = Image.new("RGBA", big.size, (0, 0, 0, 217))
-    glow.paste(silhouette, ((W - 254) // 2, 702), big.split()[3])
-    frame.alpha_composite(glow.filter(ImageFilter.GaussianBlur(14)))
-    frame.alpha_composite(big, ((W - 254) // 2, 700))
+    if logo is not None:
+        big = logo.resize((254, 254), Image.LANCZOS)
+        glow = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        silhouette = Image.new("RGBA", big.size, (0, 0, 0, 217))
+        glow.paste(silhouette, ((W - 254) // 2, 702), big.split()[3])
+        frame.alpha_composite(glow.filter(ImageFilter.GaussianBlur(14)))
+        frame.alpha_composite(big, ((W - 254) // 2, 700))
     draw = ImageDraw.Draw(frame)
-    lines = wrap(draw, "Please like and follow for more videos", fonts.end, 880)
+    lines = wrap(draw, story.get("end_text") or "Please like and follow for more videos", fonts.end, 880)
     draw_shadowed_lines(frame, lines, fonts.end, 1090, 88)
-    draw_spaced(frame, "VIRAL VIBE STORIES", fonts.footer_end, 1230, (255, 255, 255, 153), 6)
+    # Vibe Stories keeps its fixed footer position; a longer studio closing line
+    # pushes the footer down so they never overlap.
+    footer_y = 1230
+    if story.get("end_text"):
+        footer_y = max(1230, block_positions(lines or [""], 1090, 88)[-1][1] + 140)
+    draw_spaced(frame, brand_of(story), fonts.footer_end, footer_y, (255, 255, 255, 153), 6)
     return frame
+
+
+# ---------------------------------------------------------------------------
+# Moving background (Viral Studios only)
+# ---------------------------------------------------------------------------
+
+# A slow "Ken Burns" move on each picture: zoom in, zoom out, or zoom in while
+# drifting sideways, taking turns so consecutive pictures never move the same way.
+ZOOM = 0.10
+MOVES = [
+    ("1+{z}*on/{n}", "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"),
+    ("1+{z}-{z}*on/{n}", "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"),
+    ("1+{z}*on/{n}", "(iw-iw/zoom)*on/{n}", "(ih-ih/zoom)/2"),
+]
+
+
+def moving_background(plates, work):
+    """One clip per picture, each exactly as long as its stretch of narration
+    (snapped to the frame grid), joined into a single background video."""
+    clips = []
+    for index, (image, start, end) in enumerate(plates):
+        frames = round(end * FPS) - round(start * FPS)
+        if frames <= 0:
+            continue
+        zoom, x, y = (part.format(z=ZOOM, n=max(1, frames - 1)) for part in MOVES[index % len(MOVES)])
+        clip = work / f"bg{index:03d}.mp4"
+        run([
+            "ffmpeg", "-y", "-v", "error", "-i", str(image),
+            "-vf",
+            f"scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,crop={W * 2}:{H * 2},"
+            f"zoompan=z='{zoom}':x='{x}':y='{y}':d={frames}:s={W}x{H}:fps={FPS},format=yuv420p",
+            "-frames:v", str(frames),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-r", str(FPS),
+            str(clip),
+        ])
+        clips.append(clip)
+    (work / "bg.txt").write_text("".join(f"file '{clip.name}'\n" for clip in clips))
+    background = work / "background.mp4"
+    run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(work / "bg.txt"), "-c", "copy", str(background)])
+    return background
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +304,16 @@ def end_frame(base, fonts, logo):
 def render_story(story, work):
     fonts = Fonts()
     backdrop = download(story["backdrop_url"], work / "backdrop.img")
-    logo = Image.open(download(story["logo_url"], work / "logo.img")).convert("RGBA")
-    base = build_base(backdrop, logo)
+    # A studio may have no logo yet: the cards are then drawn without one.
+    logo = (
+        Image.open(download(story["logo_url"], work / "logo.img")).convert("RGBA")
+        if story.get("logo_url")
+        else None
+    )
+    # Motion (Viral Studios): the picture moves underneath while the gradient, logo
+    # and captions stay put, so frames are drawn on a transparent overlay instead.
+    motion = bool(story.get("motion"))
+    base = build_base(None if motion else backdrop, logo)
 
     # Narration: title, every beat, then silence under the follow card.
     audio_parts = []
@@ -260,7 +328,15 @@ def render_story(story, work):
         wav = to_wav(mp3, work / f"line{index:03d}.wav")
         audio_parts.append(wav)
         beats.append((beat, duration_of(wav)))
-    audio_parts.append(silence_wav(END_CARD_SECONDS, work / "end.wav"))
+    # The end card: silent, or with the episode's spoken closing line under it.
+    end_seconds = END_CARD_SECONDS
+    if story.get("outro_audio_url"):
+        outro_wav = to_wav(download(story["outro_audio_url"], work / "outro.mp3"), work / "outro.wav")
+        audio_parts.append(outro_wav)
+        audio_parts.append(silence_wav(0.8, work / "end.wav"))
+        end_seconds = duration_of(outro_wav) + 0.8
+    else:
+        audio_parts.append(silence_wav(END_CARD_SECONDS, work / "end.wav"))
 
     # Frames, each with the time span it covers on the narration timeline.
     spans = []  # (png path, start seconds, end seconds)
@@ -268,16 +344,33 @@ def render_story(story, work):
 
     title_seconds = duration_of(title_wav)
     path = work / "f_title.png"
-    title_frame(base, fonts, story).convert("RGB").save(path, optimize=False)
+    title = title_frame(base, fonts, story)
+    (title if motion else title.convert("RGB")).save(path, optimize=False)
     spans.append((path, clock, clock + title_seconds))
+    # The picture under each stretch of the video, for the moving background.
+    plates = [(backdrop, clock, clock + title_seconds)]
     clock += title_seconds
 
     # Each line plays over its beat's own still when it has one; every line of a
     # beat shares that still. Stills are fetched once each.
     stills = {}
 
-    def base_for(url):
+    plate_paths = {}
+
+    def plate_for(url):
+        """The raw picture for a beat (motion mode), falling back to the backdrop."""
         if not url:
+            return backdrop
+        if url not in plate_paths:
+            try:
+                plate_paths[url] = download(url, work / f"plate{len(plate_paths)}.img")
+            except Exception as error:
+                print(f"  still unavailable, using backdrop: {error}")
+                plate_paths[url] = backdrop
+        return plate_paths[url]
+
+    def base_for(url):
+        if not url or motion:
             return base
         if url not in stills:
             try:
@@ -293,18 +386,23 @@ def render_story(story, work):
         beat_base = base_for(beat.get("image_url") or "")
         for page_index, page in enumerate(pages):
             path = work / f"f_{index:03d}_{page_index:03d}.png"
-            caption_frame(beat_base, fonts, page.get("text")).convert("RGB").save(path, optimize=False)
+            caption = caption_frame(beat_base, fonts, page.get("text"))
+            (caption if motion else caption.convert("RGB")).save(path, optimize=False)
             start = clock + seconds * float(page.get("start", 0))
             end = clock + seconds * float(page.get("end", 1))
             if page_index == len(pages) - 1:
                 end = clock + seconds
             spans.append((path, start, end))
+        if motion:
+            plates.append((plate_for(beat.get("image_url") or ""), clock, clock + seconds))
         clock += seconds
 
     path = work / "f_end.png"
-    end_frame(base, fonts, logo).convert("RGB").save(path, optimize=False)
-    spans.append((path, clock, clock + END_CARD_SECONDS))
-    total = clock + END_CARD_SECONDS
+    end = end_frame(base, fonts, logo, story)
+    (end if motion else end.convert("RGB")).save(path, optimize=False)
+    spans.append((path, clock, clock + end_seconds))
+    plates.append((backdrop, clock, clock + end_seconds))
+    total = clock + end_seconds
 
     # Snap every boundary to the frame grid so the picture never drifts from the voice.
     lines = []
@@ -323,6 +421,28 @@ def render_story(story, work):
     ])
 
     output = work / "reel.mp4"
+    if motion:
+        background = moving_background(plates, work)
+        for crf in (23, 28, 33):
+            run([
+                "ffmpeg", "-y", "-v", "error",
+                "-i", str(background),
+                "-f", "concat", "-safe", "0", "-i", str(work / "frames.txt"),
+                "-i", str(work / "narration.wav"),
+                "-filter_complex",
+                f"[1:v]fps={FPS},format=rgba[ov];[0:v][ov]overlay=0:0:format=auto,format=yuv420p[v]",
+                "-map", "[v]", "-map", "2:a",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+                "-c:a", "aac", "-b:a", "128k",
+                "-t", f"{total:.3f}", "-movflags", "+faststart",
+                str(output),
+            ])
+            size = output.stat().st_size
+            print(f"  encoded at crf {crf}: {size / 1048576:.1f} MB, {total:.1f}s")
+            if size <= MAX_UPLOAD_BYTES:
+                return output
+        raise RuntimeError("The reel is still over 55 MB at the lowest quality setting.")
+
     for crf in (23, 28, 33):
         run([
             "ffmpeg", "-y", "-v", "error",
@@ -359,7 +479,7 @@ def main():
         work = Path(tempfile.mkdtemp(prefix="reel-"))
         try:
             video = render_story(story, work)
-            result = upload_reel(story["id"], video)
+            result = upload_reel(story["id"], video, story.get("episode"))
             print(f"  uploaded: {result.get('reel_url')}")
             rendered += 1
         finally:

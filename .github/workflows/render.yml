@@ -38,3 +38,19 @@ jobs:
           RENDER_KEY: ${{ secrets.RENDER_KEY }}
           MAX_RENDERS: "2"
         run: python render.py
+
+      # Viral Studios (a separate app): multi-part series, one episode per video,
+      # with a slow zoom and pan on the pictures. Runs even if the step above
+      # failed, and never affects it. Waits quietly until its address and key are set.
+      - name: Render Viral Studios episodes
+        if: always()
+        env:
+          APP_URL: ${{ vars.STUDIOS_APP_URL }}
+          RENDER_KEY: ${{ secrets.STUDIOS_RENDER_KEY }}
+          MAX_RENDERS: "6"
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$RENDER_KEY" ]; then
+            echo "Viral Studios is not set up yet (STUDIOS_APP_URL variable and STUDIOS_RENDER_KEY secret). Skipping."
+            exit 0
+          fi
+          python render.py
