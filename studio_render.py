@@ -35,6 +35,38 @@ LOOP_SECONDS = 8
 # Timeline
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Kokoro voices (free, open-source): the app sends "kokoro:<voice>" in place of an
+# audio link, plus the words, and the narration is made here.
+# ---------------------------------------------------------------------------
+
+_KOKORO = None
+
+
+def kokoro_speech(marker, text, dest):
+    """Speaks `text` in the Kokoro voice named by the marker; returns a WAV path."""
+    global _KOKORO
+    import numpy as np
+    import soundfile as sf
+    if _KOKORO is None:
+        from kokoro import KPipeline
+        _KOKORO = KPipeline(lang_code="a")
+    voice = marker.split(":", 1)[1]
+    text = str(text or "").strip() or "."
+    chunks = [audio for _, _, audio in _KOKORO(text, voice=voice, speed=1.0)]
+    audio = np.concatenate(chunks) if chunks else np.zeros(2400)
+    path = Path(dest).with_suffix(".kokoro.wav")
+    sf.write(path, audio, 24000)
+    return path
+
+
+def fetch_audio(url, dest, text):
+    """An audio link is downloaded; a Kokoro marker is spoken from the text."""
+    if str(url or "").startswith("kokoro:"):
+        return kokoro_speech(url, text, dest)
+    return core.download(url, dest)
+
+
 def build_timeline(story, work):
     """Downloads the narration and works out what is on screen when.
 
@@ -61,7 +93,10 @@ def build_timeline(story, work):
     audio, plates, captions, shot_clips = [], [], [], []
     clock = 0.0
 
-    title_wav = core.to_wav(get(story["title_audio_url"], work / "title.mp3"), work / "title.wav")
+    title_wav = core.to_wav(
+        fetch_audio(story["title_audio_url"], work / "title.mp3", story.get("title_text") or story.get("title")),
+        work / "title.wav",
+    )
     audio.append(title_wav)
     title_seconds = core.duration_of(title_wav)
     plates.append((image(story.get("title_image_url") or ""), 0.0, title_seconds))
@@ -69,7 +104,8 @@ def build_timeline(story, work):
     clock = title_seconds
 
     for index, beat in enumerate(story.get("beats") or []):
-        wav = core.to_wav(get(beat["audio_url"], work / f"line{index:03d}.mp3"), work / f"line{index:03d}.wav")
+        spoken = beat.get("text") or " ".join(page.get("text", "") for page in beat.get("pages") or [])
+        wav = core.to_wav(fetch_audio(beat["audio_url"], work / f"line{index:03d}.mp3", spoken), work / f"line{index:03d}.wav")
         audio.append(wav)
         seconds = core.duration_of(wav)
         # Each picture with its moving clip, if it has one ("clips" lines up with "images").
@@ -97,7 +133,7 @@ def build_timeline(story, work):
 
     end_start = clock
     if story.get("outro_audio_url"):
-        outro = core.to_wav(get(story["outro_audio_url"], work / "outro.mp3"), work / "outro.wav")
+        outro = core.to_wav(fetch_audio(story["outro_audio_url"], work / "outro.mp3", story.get("end_text")), work / "outro.wav")
         audio.append(outro)
         audio.append(core.silence_wav(0.8, work / "end.wav"))
         end_seconds = core.duration_of(outro) + 0.8

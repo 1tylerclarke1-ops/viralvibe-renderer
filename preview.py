@@ -23,19 +23,19 @@ story = {
     "trope_label": "Zombie Outbreak · Preview", "brand": "Zombie Outbreak", "motion": True,
     "backdrop_url": B + "40dd95235_studio-1795308217724.png",
     "title_image_url": B + "6c6dac3f0_studio-1795354080805.png",
-    "opener_url": "", "atmosphere": "rain", "music": "dark", "word_captions": True,
+    "opener_url": "", "clip_mode": "settle", "atmosphere": "rain", "music": "dark", "word_captions": True,
     "watermark": "@thezombiefiles", "thumb_text": "PREVIEW", "part_label": "PREVIEW",
-    "title_audio_url": "https://media.base44.com/files/public/6b021b03e93ffe8d1d017341/108befbfb_speech.mp3",
+    "title_audio_url": "kokoro:am_michael", "title_text": "Part 2. The Trucker Who Walked Into the Outbreak for His Daughter",
     "outro_audio_url": "", "end_text": "",
     "beats": [{
-        "audio_url": "https://media.base44.com/files/public/6b021b03e93ffe8d1d017341/69487b0cc_speech.mp3",
+        "audio_url": "kokoro:am_michael", "text": TEXT,
         "image_url": "",
         "images": [B + "6c6dac3f0_studio-1795354080805.png", B + "a7890d8ee_studio-1795354261089.png",
                    B + "268429e2f_studio-1795354783001.png"],
         "clips": [B + "c56b07e0b_opener-6b023738c090c4029ccc5d69-part2.mp4",
                   B + "92ba2fd8b_opener-6b023738c090c4029ccc5d69-part3.mp4",
                   B + "7e3ceabbc_opener-6b023738c090c4029ccc5d69-part4.mp4"],
-        "speaker": None, "pages": pages,
+        "clips_reverse": [True, True, True], "speaker": None, "pages": pages,
     }],
 }
 
