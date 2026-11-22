@@ -1,0 +1,39 @@
+name: Preview
+
+# Renders previews/preview.mp4 from preview.py and saves it on the "previews" branch.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg and Python packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          pip install -q -r requirements.txt
+      - name: Download fonts
+        run: |
+          mkdir -p fonts
+          curl -sSfL -o fonts/Outfit.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/outfit/Outfit%5Bwght%5D.ttf"
+          curl -sSfL -o fonts/JetBrainsMono.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf"
+      - name: Render preview
+        run: python preview.py
+      - name: Save to the previews branch
+        run: |
+          git config user.name "preview-bot"
+          git config user.email "preview-bot@users.noreply.github.com"
+          git checkout --orphan previews
+          git rm -rq --cached . || true
+          git add -f previews/preview.mp4
+          git commit -qm "Preview $(date -u +%F' '%H:%M)"
+          git push -f origin previews

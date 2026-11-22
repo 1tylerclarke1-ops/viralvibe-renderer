@@ -119,7 +119,10 @@ def word_weight(word):
     return weight
 
 
-def caption_words_frame(fonts, words, lit):
+CAPTION_Y = 1300  # centre of the caption block: lower third, clear of faces and of TikTok's buttons
+
+
+def caption_words_frame(fonts, words, lit, centre_y=CAPTION_Y):
     """The caption page with word number `lit` in the highlight colour."""
     frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(frame)
@@ -136,7 +139,7 @@ def caption_words_frame(fonts, words, lit):
         line.append((index, word, w))
     if line:
         lines.append((line, width))
-    placed = core.block_positions([None] * len(lines), 990, 93)
+    placed = core.block_positions([None] * len(lines), centre_y, 93)
     shadow = Image.new("RGBA", frame.size, (0, 0, 0, 0))
     shadow_draw = ImageDraw.Draw(shadow)
     for (items, line_width), (_, y) in zip(lines, placed):
@@ -169,6 +172,7 @@ def build_overlay(story, captions, work):
         spans.append((path, start, end))
 
     word_mode = bool(story.get("word_captions"))
+    centre_y = int(story.get("caption_y") or CAPTION_Y)
     for kind, text, start, end in captions:
         if kind == "title":
             save(core.title_frame(clear, fonts, story), start, end)
@@ -185,7 +189,7 @@ def build_overlay(story, captions, work):
             clock = start
             for index, weight in enumerate(weights):
                 stop = end if index == len(words) - 1 else clock + (end - start) * weight / total
-                save(caption_words_frame(fonts, words, index), clock, stop)
+                save(caption_words_frame(fonts, words, index, centre_y), clock, stop)
                 clock = stop
 
     lines = []
@@ -457,6 +461,19 @@ def render_studio(story, work):
     if kind != "none":
         chain += f";[{current}]format=yuv420p,noise=alls=7:allf=t,vignette=angle=PI/4.5[pic3]"
         current = "pic3"
+
+    # Watermark: the handle, half see-through, swapping between the top corners every
+    # 12 seconds so it cannot simply be cropped or blurred out of a stolen copy.
+    mark = str(story.get("watermark") or "").strip()
+    if mark:
+        safe = "".join(ch for ch in mark if ch.isalnum() or ch in "@._- ")
+        font = str((core.FONT_DIR / "Outfit.ttf").resolve()).replace(":", "\\:")
+        chain += (
+            f";[{current}]drawtext=fontfile='{font}':text='{safe}':fontsize=42:fontcolor=white@0.6:"
+            f"shadowcolor=black@0.6:shadowx=2:shadowy=2:"
+            f"x='if(lt(mod(t,24),12),70,w-tw-70)':y=250[wm]"
+        )
+        current = "wm"
 
     chain += f";[1:v]fps={FPS},format=rgba[ov];[{current}][ov]overlay=0:0:format=auto,format=yuv420p[v]"
 
