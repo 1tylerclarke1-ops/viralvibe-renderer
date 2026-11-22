@@ -49,7 +49,6 @@ jobs:
           RENDER_KEY: ${{ secrets.STUDIOS_RENDER_KEY }}
           MAX_RENDERS: "6"
         run: |
-          echo "Variables this run can see: ${{ join(toJSON(vars), ' ') }}"
           if [ -n "$APP_URL" ]; then echo "STUDIOS_APP_URL: found"; else echo "STUDIOS_APP_URL: missing"; fi
           if [ -n "$RENDER_KEY" ]; then echo "STUDIOS_RENDER_KEY: found"; else echo "STUDIOS_RENDER_KEY: missing"; fi
           if [ -z "$APP_URL" ] || [ -z "$RENDER_KEY" ]; then

@@ -54,18 +54,26 @@ def next_story():
     return None if data.get("none") else data
 
 
-def upload_reel(story_id, path, episode=None):
+def upload_reel(story_id, path, episode=None, thumb=None):
     data = {"script_id": story_id}
     if episode is not None:  # Viral Studios: one video per episode of a series
         data["episode"] = str(episode)
     with open(path, "rb") as handle:
-        response = requests.post(
-            f"{APP_URL}/api/render/complete",
-            headers=api_headers(),
-            data=data,
-            files={"file": ("reel.mp4", handle, "video/mp4")},
-            timeout=600,
-        )
+        files = {"file": ("reel.mp4", handle, "video/mp4")}
+        thumb_handle = open(thumb, "rb") if thumb else None
+        if thumb_handle:  # Viral Studios: the part's thumbnail
+            files["thumb"] = ("thumb.jpg", thumb_handle, "image/jpeg")
+        try:
+            response = requests.post(
+                f"{APP_URL}/api/render/complete",
+                headers=api_headers(),
+                data=data,
+                files=files,
+                timeout=600,
+            )
+        finally:
+            if thumb_handle:
+                thumb_handle.close()
     if not response.ok:
         raise RuntimeError(f"Upload failed ({response.status_code}): {response.text[:300]}")
     return response.json()
@@ -518,8 +526,12 @@ def main():
         print(f"Rendering: {story['title']} ({story['id']})")
         work = Path(tempfile.mkdtemp(prefix="reel-"))
         try:
-            video = render_story(story, work)
-            result = upload_reel(story["id"], video, story.get("episode"))
+            if story.get("motion"):  # Viral Studios episodes have their own renderer
+                from studio_render import render_studio
+                video, thumb = render_studio(story, work)
+            else:  # Viral Vibe Stories: unchanged
+                video, thumb = render_story(story, work), None
+            result = upload_reel(story["id"], video, story.get("episode"), thumb)
             print(f"  uploaded: {result.get('reel_url')}")
             rendered += 1
         finally:
