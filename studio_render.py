@@ -75,15 +75,20 @@ def build_timeline(story, work):
         # Each picture with its moving clip, if it has one ("clips" lines up with "images").
         given = beat.get("images") or []
         clip_list = beat.get("clips") or []
-        pairs = [(url, clip_list[i] if i < len(clip_list) else "") for i, url in enumerate(given) if url]
-        pairs = pairs or [(beat.get("image_url") or "", "")]
+        reverse_list = beat.get("clips_reverse") or []
+        pairs = [
+            (url, clip_list[i] if i < len(clip_list) else "", bool(reverse_list[i]) if i < len(reverse_list) else False)
+            for i, url in enumerate(given)
+            if url
+        ]
+        pairs = pairs or [(beat.get("image_url") or "", "", False)]
         share = seconds / len(pairs)
-        for position, (url, clip_url) in enumerate(pairs):
+        for position, (url, clip_url, reverse) in enumerate(pairs):
             start = clock + share * position
             end = clock + seconds if position == len(pairs) - 1 else start + share
             plates.append((image(url), start, end))
             if clip_url:
-                shot_clips.append((clip_url, start, end))
+                shot_clips.append((clip_url, start, end, reverse))
         for page in beat.get("pages") or []:
             start = clock + seconds * float(page.get("start", 0))
             end = clock + seconds * float(page.get("end", 1))
@@ -102,7 +107,43 @@ def build_timeline(story, work):
     total = end_start + end_seconds
     plates.append((backdrop, end_start, total))
     captions.append(("end", None, end_start, total))
+
+    if story.get("clip_mode") == "settle":
+        settled = []
+        for number, (clip_url, start, end, reverse) in enumerate(shot_clips):
+            try:
+                path = get(clip_url, work / f"clip{number:03d}.mp4")
+                length = min(core.duration_of(path), end - start - 0.5)
+                if length < 1.0:
+                    continue
+                settled.append((path, start, length, reverse))
+                plates = split_plate(plates, start + length)
+            except Exception as error:  # a broken clip leaves that shot a moving still
+                print(f"  shot clip {number + 1} skipped: {error}")
+        shot_clips = settled
+        story["_opener"] = None
+        if story.get("opener_url"):
+            try:
+                path = get(story["opener_url"], work / "opener.mp4")
+                length = min(core.duration_of(path), max(2.0, end_start - 0.5))
+                story["_opener"] = (path, length, bool(story.get("opener_reverse")))
+                plates = split_plate(plates, length)
+            except Exception as error:
+                print(f"  opening clip skipped: {error}")
     return audio, plates, captions, total, title_seconds, end_start, shot_clips
+
+
+def split_plate(plates, at):
+    """Cuts the picture showing at time `at` in two, so its camera move starts afresh
+    (on the whole picture) exactly when a clip that ends on that picture finishes."""
+    out = []
+    for image, start, end in plates:
+        if start < at - 0.05 and end > at + 0.05:
+            out.append((image, start, at))
+            out.append((image, at, end))
+        else:
+            out.append((image, start, end))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +441,36 @@ def render_studio(story, work):
     current = "pic0"
     next_input = 3
 
+    settle = story.get("clip_mode") == "settle"
+
+    def settle_clip(path, start, length, reverse, label):
+        """A clip that plays once and comes to rest on its picture (backwards if it was
+        made starting from the picture), with a short blend into the moving still."""
+        nonlocal chain, current, next_input
+        blend = min(0.3, length / 5)
+        inputs.extend(["-i", str(path)])
+        chain += (
+            f";[{next_input}:v]fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+            f"trim=0:{length:.3f},setpts=PTS-STARTPTS{',reverse' if reverse else ''},format=rgba,"
+            f"fade=t=out:st={length - blend:.3f}:d={blend:.3f}:alpha=1,"
+            f"setpts=PTS+{start:.3f}/TB[{label}];"
+            f"[{current}][{label}]overlay=0:0:eof_action=pass:format=auto,format=gbrp[{label}o]"
+        )
+        current = f"{label}o"
+        next_input += 1
+
+    if settle:
+        if story.get("_opener"):
+            path, length, reverse = story["_opener"]
+            settle_clip(path, 0.0, length, reverse, "op")
+            print(f"  opening clip: {length:.1f}s (settles on the picture)")
+        for number, (path, start, length, reverse) in enumerate(shot_clips):
+            settle_clip(path, start, length, reverse, f"sc{number}")
+        if shot_clips:
+            print(f"  shot clips: {len(shot_clips)} (each settles on its picture)")
+
     # The opening clip: real AI video for the first few seconds, fading into the moving shots.
-    if story.get("opener_url"):
+    if not settle and story.get("opener_url"):
         try:
             clip = core.download(story["opener_url"], work / "opener.mp4")
             length = min(core.duration_of(clip), max(2.0, end_start - 0.5))
@@ -422,7 +491,7 @@ def render_studio(story, work):
     # Every-shot clips: each shot cuts straight to its AI video, which plays forward then
     # back (a seamless loop, so a 5-second clip covers up to 10 seconds of the shot), then
     # fades into the moving still for whatever is left of the shot.
-    for number, (clip_url, start, end) in enumerate(shot_clips):
+    for number, (clip_url, start, end, _reverse) in enumerate([] if settle else shot_clips):
         try:
             clip = core.download(clip_url, work / f"clip{number:03d}.mp4")
             one_way = core.duration_of(clip)
@@ -444,7 +513,7 @@ def render_studio(story, work):
             next_input += 1
         except Exception as error:  # a broken clip leaves that shot as a moving still
             print(f"  shot clip {number + 1} skipped: {error}")
-    if shot_clips:
+    if shot_clips and not settle:
         print(f"  shot clips: {len(shot_clips)}")
 
     kind = story.get("atmosphere") or "grain"
