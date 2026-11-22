@@ -11,6 +11,7 @@ Environment:
   FONT_DIR      folder holding Outfit.ttf and JetBrainsMono.ttf (default ./fonts)
 """
 
+import random
 import io
 import json
 import os
@@ -261,14 +262,42 @@ def end_frame(base, fonts, logo, story=None):
 # Moving background (Viral Studios only)
 # ---------------------------------------------------------------------------
 
-# A slow "Ken Burns" move on each picture: zoom in, zoom out, or zoom in while
-# drifting sideways, taking turns so consecutive pictures never move the same way.
-ZOOM = 0.10
-MOVES = [
-    ("1+{z}*on/{n}", "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"),
-    ("1+{z}-{z}*on/{n}", "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"),
-    ("1+{z}*on/{n}", "(iw-iw/zoom)*on/{n}", "(ih-ih/zoom)/2"),
-]
+# A moving "camera" on each picture. Instead of one slow zoom across a whole scene
+# (which reads as a still on a phone), the camera travels between framings every
+# few seconds: a wide view, then a push in on one part of the picture, then a
+# drift across to another part, and so on. Each leg starts exactly where the last
+# one ended, so the motion is continuous with no cuts, and eases in and out.
+LEG_SECONDS = 6.5
+WIDE = 1.06
+
+
+def camera_path(index, seconds):
+    """Framings (zoom, centre x, centre y) the camera visits on one picture."""
+    rng = random.Random(index * 7919 + 17)
+    legs = max(1, round(seconds / LEG_SECONDS))
+    points = [(WIDE, 0.5, 0.5)]
+    for leg in range(legs):
+        if leg % 2 == 0:
+            zoom = rng.uniform(1.30, 1.45)  # push in on a part of the picture
+        else:
+            zoom = rng.uniform(1.12, 1.22)  # ease back out a little
+        span = 0.5 - 0.5 / zoom
+        cx = 0.5 + rng.uniform(-span, span) * 0.9
+        cy = 0.5 + rng.uniform(-span, span) * 0.9
+        points.append((zoom, cx, cy))
+    return points
+
+
+def leg_filter(a, b, frames):
+    """ffmpeg zoompan for one leg, eased (smoothstep) from framing a to b."""
+    n = max(1, frames - 1)
+    t = f"(3*pow(on/{n},2)-2*pow(on/{n},3))"
+    z = f"({a[0]:.4f}+({b[0] - a[0]:.4f})*{t})"
+    cx = f"({a[1]:.4f}+({b[1] - a[1]:.4f})*{t})"
+    cy = f"({a[2]:.4f}+({b[2] - a[2]:.4f})*{t})"
+    x = f"max(0,min(iw-iw/zoom,{cx}*iw-iw/zoom/2))"
+    y = f"max(0,min(ih-ih/zoom,{cy}*ih-ih/zoom/2))"
+    return f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={W}x{H}:fps={FPS}"
 
 
 def moving_background(plates, work):
@@ -279,18 +308,29 @@ def moving_background(plates, work):
         frames = round(end * FPS) - round(start * FPS)
         if frames <= 0:
             continue
-        zoom, x, y = (part.format(z=ZOOM, n=max(1, frames - 1)) for part in MOVES[index % len(MOVES)])
-        clip = work / f"bg{index:03d}.mp4"
+        points = camera_path(index, frames / FPS)
+        legs = len(points) - 1
+        # Share the frames between the legs; the last leg takes the remainder.
+        counts = [frames // legs] * legs
+        counts[-1] += frames - sum(counts)
+        prepared = work / f"plate_scaled{index:03d}.png"
         run([
-            "ffmpeg", "-y", "-v", "error", "-i", str(image),
-            "-vf",
-            f"scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,crop={W * 2}:{H * 2},"
-            f"zoompan=z='{zoom}':x='{x}':y='{y}':d={frames}:s={W}x{H}:fps={FPS},format=yuv420p",
-            "-frames:v", str(frames),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-r", str(FPS),
-            str(clip),
+            "ffmpeg", "-y", "-v", "error", "-i", str(image), "-vf",
+            f"scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,crop={W * 2}:{H * 2}",
+            "-frames:v", "1", str(prepared),
         ])
-        clips.append(clip)
+        for leg in range(legs):
+            if counts[leg] <= 0:
+                continue
+            clip = work / f"bg{index:03d}_{leg:02d}.mp4"
+            run([
+                "ffmpeg", "-y", "-v", "error", "-i", str(prepared),
+                "-vf", leg_filter(points[leg], points[leg + 1], counts[leg]) + ",format=yuv420p",
+                "-frames:v", str(counts[leg]),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-r", str(FPS),
+                str(clip),
+            ])
+            clips.append(clip)
     (work / "bg.txt").write_text("".join(f"file '{clip.name}'\n" for clip in clips))
     background = work / "background.mp4"
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(work / "bg.txt"), "-c", "copy", str(background)])
