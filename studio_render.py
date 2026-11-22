@@ -5,7 +5,8 @@ never reach this file, so their videos are unchanged.
 
 Layers, bottom to top:
   1. Pictures: three shots per scene, each with a moving camera (push in, drift,
-     ease out). The part opens on a few seconds of real AI video when there is one.
+     ease out). The part opens on a few seconds of real AI video when there is one,
+     and in every-shot studios each shot gets its own AI clip too.
   2. Atmosphere: rain, fog, dust or embers drifting over the picture, film grain
      and a soft vignette, chosen per studio.
   3. Captions: the spoken words, a few at a time, with the word being said
@@ -40,6 +41,7 @@ def build_timeline(story, work):
     Returns (audio_parts, plates, captions, total, title_seconds, end_start):
       plates:   [(image_path, start, end)] for the moving pictures
       captions: [(kind, payload, start, end)] for the overlay cards
+      shot_clips: [(clip_url, start, end)] AI video for a shot (every-shot studios only)
     """
     get = core.download
     backdrop = get(story["backdrop_url"], work / "backdrop.img")
@@ -56,7 +58,7 @@ def build_timeline(story, work):
                 images[url] = backdrop
         return images[url]
 
-    audio, plates, captions = [], [], []
+    audio, plates, captions, shot_clips = [], [], [], []
     clock = 0.0
 
     title_wav = core.to_wav(get(story["title_audio_url"], work / "title.mp3"), work / "title.wav")
@@ -70,12 +72,18 @@ def build_timeline(story, work):
         wav = core.to_wav(get(beat["audio_url"], work / f"line{index:03d}.mp3"), work / f"line{index:03d}.wav")
         audio.append(wav)
         seconds = core.duration_of(wav)
-        urls = [url for url in (beat.get("images") or []) if url] or [beat.get("image_url") or ""]
-        share = seconds / len(urls)
-        for position, url in enumerate(urls):
+        # Each picture with its moving clip, if it has one ("clips" lines up with "images").
+        given = beat.get("images") or []
+        clip_list = beat.get("clips") or []
+        pairs = [(url, clip_list[i] if i < len(clip_list) else "") for i, url in enumerate(given) if url]
+        pairs = pairs or [(beat.get("image_url") or "", "")]
+        share = seconds / len(pairs)
+        for position, (url, clip_url) in enumerate(pairs):
             start = clock + share * position
-            end = clock + seconds if position == len(urls) - 1 else start + share
+            end = clock + seconds if position == len(pairs) - 1 else start + share
             plates.append((image(url), start, end))
+            if clip_url:
+                shot_clips.append((clip_url, start, end))
         for page in beat.get("pages") or []:
             start = clock + seconds * float(page.get("start", 0))
             end = clock + seconds * float(page.get("end", 1))
@@ -94,7 +102,7 @@ def build_timeline(story, work):
     total = end_start + end_seconds
     plates.append((backdrop, end_start, total))
     captions.append(("end", None, end_start, total))
-    return audio, plates, captions, total, title_seconds, end_start
+    return audio, plates, captions, total, title_seconds, end_start, shot_clips
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +379,7 @@ def make_thumbnail(story, plates, work):
 # ---------------------------------------------------------------------------
 
 def render_studio(story, work):
-    audio, plates, captions, total, title_seconds, end_start = build_timeline(story, work)
+    audio, plates, captions, total, title_seconds, end_start, shot_clips = build_timeline(story, work)
     (work / "audio.txt").write_text("".join(f"file '{p.name}'\n" for p in audio))
     core.run([
         "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
@@ -406,6 +414,34 @@ def render_studio(story, work):
             print(f"  opening clip: {length:.1f}s")
         except Exception as error:  # a broken clip never stops the episode
             print(f"  opening clip skipped: {error}")
+
+    # Every-shot clips: each shot cuts straight to its AI video, which plays forward then
+    # back (a seamless loop, so a 5-second clip covers up to 10 seconds of the shot), then
+    # fades into the moving still for whatever is left of the shot.
+    for number, (clip_url, start, end) in enumerate(shot_clips):
+        try:
+            clip = core.download(clip_url, work / f"clip{number:03d}.mp4")
+            one_way = core.duration_of(clip)
+            length = min(end - start, one_way * 2)
+            if length < 1.0:
+                continue
+            fade = min(0.8, length / 4)
+            label = f"sc{number}"
+            inputs += ["-i", str(clip)]
+            chain += (
+                f";[{next_input}:v]fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+                f"setpts=PTS-STARTPTS,split[{label}a][{label}b];[{label}b]reverse[{label}r];"
+                f"[{label}a][{label}r]concat=n=2:v=1:a=0,trim=0:{length:.3f},setpts=PTS-STARTPTS,format=rgba,"
+                f"fade=t=out:st={length - fade:.3f}:d={fade:.3f}:alpha=1,"
+                f"setpts=PTS+{start:.3f}/TB[{label}];"
+                f"[{current}][{label}]overlay=0:0:eof_action=pass:format=auto,format=gbrp[{label}o]"
+            )
+            current = f"{label}o"
+            next_input += 1
+        except Exception as error:  # a broken clip leaves that shot as a moving still
+            print(f"  shot clip {number + 1} skipped: {error}")
+    if shot_clips:
+        print(f"  shot clips: {len(shot_clips)}")
 
     kind = story.get("atmosphere") or "grain"
     if atmos is not None:
