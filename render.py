@@ -255,7 +255,7 @@ def end_frame(base, fonts, logo, story=None):
         frame.alpha_composite(glow.filter(ImageFilter.GaussianBlur(14)))
         frame.alpha_composite(big, ((W - 254) // 2, 700))
     draw = ImageDraw.Draw(frame)
-    lines = wrap(draw, story.get("end_text") or "Please like and follow for more videos", fonts.end, 880)
+    lines = wrap(draw, story.get("end_text") or "Thanks for watching", fonts.end, 880)
     draw_shadowed_lines(frame, lines, fonts.end, 1090, 88)
     # Vibe Stories keeps its fixed footer position; a longer studio closing line
     # pushes the footer down so they never overlap.
