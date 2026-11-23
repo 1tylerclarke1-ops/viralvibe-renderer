@@ -25,9 +25,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg espeak-ng
+          pip install -q -r requirements.txt
           pip install -q "kokoro>=0.9.4" soundfile
       - name: Record
-        run: python voice_samples.py ${{ inputs.voices }}
+        run: set -f; python voice_samples.py ${{ inputs.voices }}
       - name: Save to the voice-samples branch
         run: |
           git config user.name "preview-bot"
