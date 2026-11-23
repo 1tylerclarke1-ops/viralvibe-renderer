@@ -51,13 +51,28 @@ def kokoro_speech(marker, text, dest):
     if _KOKORO is None:
         from kokoro import KPipeline
         _KOKORO = KPipeline(lang_code="a")
-    voice = marker.split(":", 1)[1]
+    voice = kokoro_voice(marker.split(":", 1)[1])
     text = str(text or "").strip() or "."
     chunks = [audio for _, _, audio in _KOKORO(text, voice=voice, speed=1.0)]
     audio = np.concatenate(chunks) if chunks else np.zeros(2400)
     path = Path(dest).with_suffix(".kokoro.wav")
     sf.write(path, audio, 24000)
     return path
+
+
+def kokoro_voice(recipe):
+    """A voice name ("am_michael"), or a blend recipe ("am_michael*0.6+am_onyx*0.4"):
+    the named voices mixed by weight into one new voice."""
+    if "+" not in recipe and "*" not in recipe:
+        return recipe
+    mix, total = None, 0.0
+    for part in recipe.split("+"):
+        name, _, weight = part.strip().partition("*")
+        weight = float(weight or 1)
+        tensor = _KOKORO.load_voice(name) * weight
+        mix = tensor if mix is None else mix + tensor
+        total += weight
+    return mix / total
 
 
 def fetch_audio(url, dest, text):

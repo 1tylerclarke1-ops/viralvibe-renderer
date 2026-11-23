@@ -3,6 +3,11 @@ name: Voice samples
 # Records each Kokoro voice reading one line, saved on the "voice-samples" branch.
 on:
   workflow_dispatch:
+    inputs:
+      voices:
+        description: "Voices or blend recipes, space separated (blank = the default set)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -22,7 +27,7 @@ jobs:
           sudo apt-get install -y -qq ffmpeg espeak-ng
           pip install -q "kokoro>=0.9.4" soundfile
       - name: Record
-        run: python voice_samples.py
+        run: python voice_samples.py ${{ inputs.voices }}
       - name: Save to the voice-samples branch
         run: |
           git config user.name "preview-bot"
