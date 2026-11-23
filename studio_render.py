@@ -54,11 +54,63 @@ def kokoro_speech(marker, text, dest):
         _KOKORO = KPipeline(lang_code="a")
     voice = kokoro_voice(marker.split(":", 1)[1])
     text = str(text or "").strip() or "."
-    chunks = [audio for _, _, audio in _KOKORO(text, voice=voice, speed=1.0)]
+    chunks, words, offset = [], [], 0.0
+    for result in _KOKORO(text, voice=voice, speed=1.0):
+        audio = result.audio if hasattr(result, "audio") else result[2]
+        if audio is None:
+            continue
+        audio = audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio)
+        # Kokoro's own word timings, so captions land exactly on the spoken words.
+        for token in getattr(result, "tokens", None) or []:
+            start, end = getattr(token, "start_ts", None), getattr(token, "end_ts", None)
+            if start is None or end is None:
+                continue
+            words.append((str(token.text or ""), offset + float(start), offset + float(end)))
+        chunks.append(audio)
+        offset += len(audio) / 24000
     audio = np.concatenate(chunks) if chunks else np.zeros(2400)
     path = Path(dest).with_suffix(".kokoro.wav")
     sf.write(path, audio, 24000)
+    WORD_TIMES[str(path)] = words
     return path
+
+
+# Spoken word timings per Kokoro file: [(word, start, end)] in seconds.
+WORD_TIMES = {}
+
+
+def _letters(text):
+    return "".join(ch for ch in str(text or "").lower() if ch.isalnum())
+
+
+def page_times(pages, words, seconds):
+    """Start and end (seconds into the beat) of each caption page, from the real word
+    timings. Pages are matched to the speech by their share of the letters, so small
+    differences (numbers, contractions) cannot push the captions out of step."""
+    spans, total = [], 0
+    for word, start, end in words:
+        letters = len(_letters(word))
+        if letters:
+            spans.append((total, total + letters, start, end))
+            total += letters
+    texts = [_letters(page.get("text")) for page in pages]
+    page_total = sum(len(item) for item in texts)
+    if not spans or not page_total:
+        return None
+
+    def time_at(position):
+        for low, high, start, end in spans:
+            if position < high:
+                return start + (end - start) * max(0, position - low) / max(1, high - low)
+        return spans[-1][3]
+
+    out, used = [], 0
+    for index, item in enumerate(texts):
+        start = 0.0 if index == 0 else time_at(used * total / page_total)
+        used += len(item)
+        end = seconds if index == len(texts) - 1 else time_at(used * total / page_total)
+        out.append((start, max(start + 0.05, end)))
+    return out
 
 
 def kokoro_voice(recipe):
@@ -121,7 +173,8 @@ def build_timeline(story, work):
 
     for index, beat in enumerate(story.get("beats") or []):
         spoken = beat.get("text") or " ".join(page.get("text", "") for page in beat.get("pages") or [])
-        wav = core.to_wav(fetch_audio(beat["audio_url"], work / f"line{index:03d}.mp3", spoken), work / f"line{index:03d}.wav")
+        spoken_file = fetch_audio(beat["audio_url"], work / f"line{index:03d}.mp3", spoken)
+        wav = core.to_wav(spoken_file, work / f"line{index:03d}.wav")
         audio.append(wav)
         seconds = core.duration_of(wav)
         # Each picture with its moving clip, if it has one ("clips" lines up with "images").
@@ -141,10 +194,17 @@ def build_timeline(story, work):
             plates.append((image(url), start, end))
             if clip_url:
                 shot_clips.append((clip_url, start, end, reverse))
-        for page in beat.get("pages") or []:
-            start = clock + seconds * float(page.get("start", 0))
-            end = clock + seconds * float(page.get("end", 1))
+        pages = beat.get("pages") or []
+        timed = page_times(pages, WORD_TIMES.get(str(spoken_file)) or [], seconds) if pages else None
+        for page_index, page in enumerate(pages):
+            if timed:
+                start, end = clock + timed[page_index][0], clock + timed[page_index][1]
+            else:
+                start = clock + seconds * float(page.get("start", 0))
+                end = clock + seconds * float(page.get("end", 1))
             captions.append(("page", page.get("text") or "", start, end))
+        if pages:
+            print(f"  beat {index + 1}: captions timed from {'the spoken words' if timed else 'text length'}")
         clock += seconds
 
     end_start = clock
