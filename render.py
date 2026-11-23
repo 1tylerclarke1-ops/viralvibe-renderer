@@ -279,11 +279,11 @@ LEG_SECONDS = 6.5
 WIDE = 1.06
 
 
-def camera_path(index, seconds):
+def camera_path(index, seconds, start_zoom=WIDE):
     """Framings (zoom, centre x, centre y) the camera visits on one picture."""
     rng = random.Random(index * 7919 + 17)
     legs = max(1, round(seconds / LEG_SECONDS))
-    points = [(WIDE, 0.5, 0.5)]
+    points = [(start_zoom, 0.5, 0.5)]
     for leg in range(legs):
         if leg % 2 == 0:
             zoom = rng.uniform(1.30, 1.45)  # push in on a part of the picture
@@ -312,11 +312,13 @@ def moving_background(plates, work):
     """One clip per picture, each exactly as long as its stretch of narration
     (snapped to the frame grid), joined into a single background video."""
     clips = []
-    for index, (image, start, end) in enumerate(plates):
+    # A plate may carry a 4th value: the zoom its camera move starts at (1.0 for a picture
+    # continuing straight on from a clip's last frame, so nothing jumps). Default WIDE.
+    for index, (image, start, end, *extra) in enumerate(plates):
         frames = round(end * FPS) - round(start * FPS)
         if frames <= 0:
             continue
-        points = camera_path(index, frames / FPS)
+        points = camera_path(index, frames / FPS, extra[0] if extra else WIDE)
         legs = len(points) - 1
         # Share the frames between the legs; the last leg takes the remainder.
         counts = [frames // legs] * legs

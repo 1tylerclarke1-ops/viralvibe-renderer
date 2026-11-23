@@ -29,6 +29,7 @@ W, H, FPS = core.W, core.H, core.FPS
 HIGHLIGHT = (255, 214, 10, 255)  # the word being spoken
 ATMOS_W, ATMOS_H = 540, 960  # atmosphere is drawn at half size, then scaled up
 LOOP_SECONDS = 8
+SETTLE_BLEND = 0.15  # seconds a clip blends into the frame it stopped on
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +169,9 @@ def build_timeline(story, work):
                 if length < 1.0:
                     continue
                 settled.append((path, start, length, reverse))
-                plates = split_plate(plates, start + length)
+                # Switch to the clip's last frame just before its short end blend, so the
+                # picture under the blend is already the same frame (no flicker, no jump).
+                plates = split_plate(plates, start + length - SETTLE_BLEND, last_frame(path, length, work / f"clip{number:03d}_end.png"))
             except Exception as error:  # a broken clip leaves that shot a moving still
                 print(f"  shot clip {number + 1} skipped: {error}")
         shot_clips = settled
@@ -178,22 +181,35 @@ def build_timeline(story, work):
                 path = get(story["opener_url"], work / "opener.mp4")
                 length = min(core.duration_of(path), max(2.0, end_start - 0.5))
                 story["_opener"] = (path, length, bool(story.get("opener_reverse")))
-                plates = split_plate(plates, length)
+                plates = split_plate(plates, length - SETTLE_BLEND, last_frame(path, length, work / "opener_end.png"))
             except Exception as error:
                 print(f"  opening clip skipped: {error}")
     return audio, plates, captions, total, title_seconds, end_start, shot_clips
 
 
-def split_plate(plates, at):
-    """Cuts the picture showing at time `at` in two, so its camera move starts afresh
-    (on the whole picture) exactly when a clip that ends on that picture finishes."""
+def last_frame(clip, length, dest):
+    """The clip's frame at `length` seconds (where it is cut), at full 9:16 size."""
+    # Decode up to the cut and keep overwriting one image, so it ends as the last frame shown.
+    core.run([
+        "ffmpeg", "-y", "-v", "error", "-i", str(clip),
+        "-vf", f"fps={FPS},trim=0:{length:.3f},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}",
+        "-update", "1", str(dest),
+    ])
+    return dest
+
+
+def split_plate(plates, at, then_image=None):
+    """Cuts the picture showing at time `at` in two. The second half shows `then_image`
+    (the clip's own last frame), so when a clip ends the picture carries on from exactly
+    the frame the motion stopped on: no jump. Its slow camera move starts there."""
     out = []
-    for image, start, end in plates:
+    for image, start, end, *extra in plates:
         if start < at - 0.05 and end > at + 0.05:
-            out.append((image, start, at))
-            out.append((image, at, end))
+            out.append((image, start, at, *extra))
+            # Starts unzoomed (1.0), exactly as the clip's last frame looked.
+            out.append((then_image or image, at, end, 1.0))
         else:
-            out.append((image, start, end))
+            out.append((image, start, end, *extra))
     return out
 
 
@@ -499,7 +515,7 @@ def render_studio(story, work):
         comes to life), then blends into the picture's slow camera move. Never reversed
         (Tyler, 23 Nov 2026); the reverse flag is ignored."""
         nonlocal chain, current, next_input
-        blend = min(0.8, length / 4)
+        blend = SETTLE_BLEND
         inputs.extend(["-i", str(path)])
         chain += (
             f";[{next_input}:v]fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
