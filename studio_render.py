@@ -495,14 +495,15 @@ def render_studio(story, work):
     settle = story.get("clip_mode") == "settle"
 
     def settle_clip(path, start, length, reverse, label):
-        """A clip that plays once and comes to rest on its picture (backwards if it was
-        made starting from the picture), with a short blend into the moving still."""
+        """A clip that plays once, FORWARDS (as in season 1: it starts on its picture and
+        comes to life), then blends into the picture's slow camera move. Never reversed
+        (Tyler, 23 Nov 2026); the reverse flag is ignored."""
         nonlocal chain, current, next_input
-        blend = min(0.3, length / 5)
+        blend = min(0.8, length / 4)
         inputs.extend(["-i", str(path)])
         chain += (
             f";[{next_input}:v]fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-            f"trim=0:{length:.3f},setpts=PTS-STARTPTS{',reverse' if reverse else ''},format=rgba,"
+            f"trim=0:{length:.3f},setpts=PTS-STARTPTS,format=rgba,"
             f"fade=t=out:st={length - blend:.3f}:d={blend:.3f}:alpha=1,"
             f"setpts=PTS+{start:.3f}/TB[{label}];"
             f"[{current}][{label}]overlay=0:0:eof_action=pass:format=auto,format=gbrp[{label}o]"
