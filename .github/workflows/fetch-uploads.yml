@@ -1,0 +1,35 @@
+name: fetch-uploads
+# Temporary: copies finished reels into the yt-uploads branch so they can be handed over for manual YouTube upload.
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download reels
+        run: |
+          set -e
+          mkdir out && cd out
+          B=https://base44.app/api/apps/6b021b03e93ffe8d1d017341/files/mp/public/6b021b03e93ffe8d1d017341
+          get(){ curl -fsSL --retry 3 -o "TDC-ZombieFiles-$1.mp4" "$B/$2"; }
+          get S1-Part2 cc962c6b66fb46eb08531daf9080d254_viral-studios-6b023738c090c4029ccc5d69-part2.mp4
+          get S1-Part3 0236a3215466db33eae2641f0ceb7dd8_viral-studios-6b023738c090c4029ccc5d69-part3.mp4
+          get S1-Part4 be15b7ea2b4ba38a8fbfc6e19ae30a99_viral-studios-6b023738c090c4029ccc5d69-part4.mp4
+          get S1-Part5 62b787d9b2b35de9c9a272725fd0a779_viral-studios-6b023738c090c4029ccc5d69-part5.mp4
+          get S2-Part1 ad58538010440b4de7f2c12c0cc37273_viral-studios-6b035e87497b0dde8430a068-part1.mp4
+          get S2-Part2 5e36229ddf8e785038a4dd92882f0156_viral-studios-6b035e87497b0dde8430a068-part2.mp4
+          get S2-Part3 c1f1ffd14ff24658721fe9fcf3f08d70_viral-studios-6b035e87497b0dde8430a068-part3.mp4
+          get S2-Part4 b181d18e53bf925d017bfa67f100c2ca_viral-studios-6b035e87497b0dde8430a068-part4.mp4
+          get S3-Part1 d92b3bdfdd6440de63ea4d82e21f3be2_viral-studios-6b03b50a1ef8bd9f387e7fd6-part1.mp4
+          get S3-Part2 8e8b1c40170b3999e535644035278368_viral-studios-6b03b50a1ef8bd9f387e7fd6-part2.mp4
+          get S3-Part3 1f9eade5dd00ba94b7e8578d0717941c_viral-studios-6b03b50a1ef8bd9f387e7fd6-part3.mp4
+          get S3-Part4 af216b600020e627361ddc7abd41208e_viral-studios-6b03b50a1ef8bd9f387e7fd6-part4.mp4
+          ls -la
+      - name: Commit to yt-uploads branch
+        run: |
+          cd out
+          git init -q -b yt-uploads
+          git config user.name "github-actions"; git config user.email "actions@github.com"
+          git add . && git commit -qm "Reels for manual YouTube upload"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" yt-uploads
